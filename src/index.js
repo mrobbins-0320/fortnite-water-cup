@@ -1,12 +1,6 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#0a0e1a" />
-    <title>Fortnite Water Cup</title>
-  </head>
-  <body>
-    <div id="root"></div>
-  </body>
-</html>
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App";
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<React.StrictMode><App /></React.StrictMode>);
