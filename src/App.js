@@ -61,7 +61,8 @@ const calcTeam = (team) => {
   const teamPlacementPts = team.matchPlacements.reduce((sum, p) => {
     return sum + (p !== "" ? PLACEMENT_PTS(p) : 0);
   }, 0);
-  return { pts: memberTotals.pts + teamPlacementPts, shots: memberTotals.shots };
+  const waterPenalty = memberTotals.shots * 2;
+  return { pts: Math.max(0, memberTotals.pts + teamPlacementPts - waterPenalty), shots: memberTotals.shots };
 };
 
 const teamWins = (team) =>
@@ -442,7 +443,7 @@ export default function App() {
 
         {/* ── Live Scoreboard ── */}
         <div className="scoreboard">
-          <div className="sb-label">Live Standings · {totalWater} 💧 total</div>
+          <div className="sb-label">Live Standings · {totalWater} 💧 shots ({totalWater * 2} pts penalized)</div>
           <div className="sb-teams">
             {teamsWithStats.map((t, i) => {
               const pct  = t.pts > 0 ? Math.round((t.pts / maxTeamPts) * 100) : 0;
@@ -545,9 +546,9 @@ export default function App() {
                   ["🎯","Elimination",      "+1 pt"],
                   ["🔄","Reboot",           "+1 pt"],
                   ["💥","Team Wipe",        "+2 pts"],
-                  ["💧","Early Death",      "2 shots (manual)"],
-                  ["💧","Mid-game Death",   "1 shot (manual)"],
-                  ["💧","First Knocked",    "+1 shot (manual)"],
+                  ["💧","Early Death Shot",    "−2 pts from team"],
+                  ["💧","Mid-game Death Shot",  "−2 pts from team"],
+                  ["💧","First Knocked Shot",   "−2 pts from team"],
                   ["🚫","No Rage Quitting", "Commissioner"],
                 ].map(([icon,rule,val]) => (
                   <div className="rule-item" key={rule}>
