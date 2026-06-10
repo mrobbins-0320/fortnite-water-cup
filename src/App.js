@@ -1,4 +1,8 @@
-import { useState, Fragment } from "react";
+import { useState, useEffect, useRef, Fragment } from "react";
+import { db } from "./firebase";
+import { doc, onSnapshot, setDoc } from "firebase/firestore";
+
+const DOC_REF = doc(db, "tournament", "game1");
 
 // ─── Scoring ─────────────────────────────────────────────────────────────────
 const PLACEMENT_PTS = (p) => {
@@ -31,16 +35,16 @@ let _tid = 0;
 const newTeam = (name = "") => ({
   id: ++_tid,
   name,
-  // team-level placement per match: "" | "1".."20"
   matchPlacements: Array(NUM_MATCHES).fill(""),
   members: [newPlayer("")],
 });
+
+const DEFAULT_TEAMS = [newTeam("Team 1"), newTeam("Team 2")];
 
 // ─── Calc ─────────────────────────────────────────────────────────────────────
 const calcPlayer = (player) => {
   let pts = 0, shots = 0;
   player.matches.forEach((m) => {
-    // Placement points are scored at the TEAM level via matchPlacements, not per-player
     pts   += (parseInt(m.elims)      || 0) * ELIM_PTS;
     pts   += (parseInt(m.reboots)    || 0) * REBOOT_PTS;
     pts   += (parseInt(m.teamWipes)  || 0) * TEAM_WIPE_PTS;
@@ -50,21 +54,16 @@ const calcPlayer = (player) => {
 };
 
 const calcTeam = (team) => {
-  // Sum individual member stats
   const memberTotals = team.members.reduce((acc, m) => {
     const r = calcPlayer(m);
     return { pts: acc.pts + r.pts, shots: acc.shots + r.shots };
   }, { pts: 0, shots: 0 });
-
-  // Add team-level placement points (Victory Royale, Top 5, Top 10)
   const teamPlacementPts = team.matchPlacements.reduce((sum, p) => {
     return sum + (p !== "" ? PLACEMENT_PTS(p) : 0);
   }, 0);
-
   return { pts: memberTotals.pts + teamPlacementPts, shots: memberTotals.shots };
 };
 
-// wins = number of matches where team placed #1
 const teamWins = (team) =>
   team.matchPlacements.filter(p => parseInt(p) === 1).length;
 
@@ -92,7 +91,6 @@ const PLACE_LABEL = (p) => {
   if (!n) return "—";
   if (n === 1) return "👑 Victory Royale";
   if (n <= 5)  return `🔥 Top 5 (#${n})`;
-  if (n <= 10) return `#${n}`;
   return `#${n}`;
 };
 
@@ -103,7 +101,6 @@ const CSS = `
   body { background:${C.bg}; color:${C.text}; font-family:'Rajdhani',sans-serif; min-height:100vh; }
   .app { max-width:940px; margin:0 auto; padding:20px 14px 80px; }
 
-  /* hero */
   .hero { text-align:center; padding:26px 0 18px; position:relative; }
   .hero::before {
     content:''; position:absolute; inset:0;
@@ -121,7 +118,19 @@ const CSS = `
   }
   .subtitle { color:${C.muted}; font-size:.82rem; letter-spacing:.22em; text-transform:uppercase; margin-top:4px; }
 
-  /* scoreboard */
+  .sync-bar {
+    display:flex; align-items:center; justify-content:center; gap:6px;
+    font-size:.72rem; letter-spacing:.1em; text-transform:uppercase;
+    padding:5px 0 2px; color:${C.muted};
+  }
+  .sync-dot {
+    width:7px; height:7px; border-radius:50%; flex-shrink:0;
+    transition: background .4s;
+  }
+  .sync-dot.live    { background:#34d399; box-shadow:0 0 6px #34d39988; }
+  .sync-dot.saving  { background:#ffd700; box-shadow:0 0 6px #ffd70088; }
+  .sync-dot.offline { background:#ff4d6d; }
+
   .scoreboard { margin:16px 0; }
   .sb-label { font-size:.68rem; color:${C.muted}; text-transform:uppercase; letter-spacing:.12em; margin-bottom:8px; }
   .sb-teams { display:flex; gap:10px; flex-wrap:wrap; }
@@ -139,11 +148,7 @@ const CSS = `
     color:${C.gold}; font-size:.65rem; font-weight:700; letter-spacing:.06em;
     padding:1px 7px; border-radius:10px; margin-top:4px;
   }
-  .sb-rank {
-    position:absolute; top:10px; right:12px;
-    font-family:'Bebas Neue',sans-serif; font-size:1.6rem; line-height:1;
-    opacity:.18;
-  }
+  .sb-rank { position:absolute; top:10px; right:12px; font-family:'Bebas Neue',sans-serif; font-size:1.6rem; line-height:1; opacity:.18; }
   .sb-rank-badge {
     display:inline-flex; align-items:center; gap:4px;
     font-family:'Bebas Neue',sans-serif; font-size:.75rem; letter-spacing:.06em;
@@ -152,7 +157,6 @@ const CSS = `
   .sb-rank-1 { background:rgba(255,215,0,.18); border:1px solid rgba(255,215,0,.4); color:${C.gold}; }
   .sb-rank-n { background:rgba(100,116,139,.12); border:1px solid ${C.border}; color:${C.muted}; }
 
-  /* tabs */
   .tabs { display:flex; gap:4px; overflow-x:auto; padding-bottom:6px; margin:6px 0 14px; scrollbar-width:none; }
   .tabs::-webkit-scrollbar { display:none; }
   .tab {
@@ -167,14 +171,12 @@ const CSS = `
     border-color:${C.accent}; color:${C.accent};
   }
 
-  /* card */
   .card { background:${C.card}; border:1px solid ${C.border}; border-radius:10px; padding:18px; margin-bottom:14px; }
   .card-title {
     font-family:'Bebas Neue',sans-serif; font-size:1.22rem; letter-spacing:.08em;
     color:${C.accent}; margin-bottom:14px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;
   }
 
-  /* inputs */
   label { display:block; font-size:.7rem; color:${C.muted}; text-transform:uppercase; letter-spacing:.1em; margin-bottom:3px; }
   label.inline { display:inline; margin-bottom:0; }
   input, select {
@@ -185,7 +187,6 @@ const CSS = `
   input:focus, select:focus { border-color:${C.accent}; }
   select option { background:${C.card}; }
 
-  /* buttons */
   .btn { padding:8px 16px; border-radius:6px; border:none; font-family:'Rajdhani',sans-serif;
     font-size:.85rem; font-weight:700; letter-spacing:.07em; cursor:pointer; transition:all .15s; }
   .btn-ghost { background:transparent; border:1px solid ${C.border}; color:${C.muted}; }
@@ -197,7 +198,6 @@ const CSS = `
   }
   .add-row:hover { border-color:${C.accent}; color:${C.accent}; }
 
-  /* tally */
   .tally {
     display:inline-flex; align-items:center;
     border:1px solid ${C.border}; border-radius:7px; overflow:hidden; background:${C.deep};
@@ -214,7 +214,6 @@ const CSS = `
   .tally-val.water   { color:${C.water}; }
   .tally-val.nonzero { color:${C.accent}; }
 
-  /* roster */
   .team-block { border:1px solid ${C.border}; border-radius:9px; margin-bottom:14px; overflow:hidden; }
   .team-header { display:flex; align-items:flex-end; gap:10px; padding:12px 14px; background:rgba(0,212,255,.05); border-bottom:1px solid ${C.border}; flex-wrap:wrap; }
   .team-name-wrap { flex:1; min-width:140px; }
@@ -223,14 +222,11 @@ const CSS = `
   .member-row input { flex:1; }
   .member-num { font-family:'Bebas Neue',sans-serif; font-size:1rem; color:${C.muted}; width:18px; flex-shrink:0; }
 
-  /* ── team placement banner inside match scorecard ── */
   .team-placement-row {
     display:flex; align-items:center; gap:12px; flex-wrap:wrap;
     padding:10px 12px; border-radius:8px; margin-bottom:6px;
   }
-  .team-placement-label {
-    font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:.06em; flex-shrink:0;
-  }
+  .team-placement-label { font-family:'Bebas Neue',sans-serif; font-size:1rem; letter-spacing:.06em; flex-shrink:0; }
   .team-placement-sel { max-width:200px; font-size:.88rem; padding:6px 8px; }
   .placement-result-badge {
     display:inline-flex; align-items:center; gap:5px;
@@ -238,7 +234,6 @@ const CSS = `
     font-size:.95rem; letter-spacing:.04em; flex-shrink:0;
   }
 
-  /* match table */
   .match-wrap { overflow-x:auto; }
   .match-table { width:100%; border-collapse:collapse; min-width:460px; }
   .match-table th {
@@ -257,7 +252,6 @@ const CSS = `
   .pts-badge { display:inline-block; padding:2px 8px; border-radius:4px; font-size:.82rem; font-weight:700; text-align:center; white-space:nowrap; }
   .placement-sel { padding:5px 4px; font-size:.82rem; text-align:center; }
 
-  /* leaderboard */
   .lb-row {
     display:grid; grid-template-columns:42px 1fr auto 62px; gap:6px;
     align-items:center; padding:10px 14px; border-radius:8px; margin-bottom:5px;
@@ -273,8 +267,6 @@ const CSS = `
   .lb-sub  { font-size:.7rem; color:${C.muted}; }
   .lb-pts  { font-family:'Bebas Neue',sans-serif; font-size:1.5rem; color:${C.accent}; text-align:right; }
   .lb-shots{ font-size:.82rem; color:${C.water}; text-align:right; }
-  .lb-rank-num { font-family:'Bebas Neue',sans-serif; font-size:1.1rem; }
-  /* match history strip */
   .match-strip { display:flex; gap:4px; margin-top:3px; flex-wrap:wrap; }
   .match-pip {
     font-size:.62rem; font-weight:700; padding:1px 6px; border-radius:4px;
@@ -285,7 +277,6 @@ const CSS = `
   .pip-other{ background:rgba(100,116,139,.12); color:${C.muted}; border:1px solid ${C.border}; }
   .pip-none { background:transparent; color:${C.border}; border:1px dashed ${C.border}; }
 
-  /* rules grid */
   .rules-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
   .rule-item { display:flex; align-items:center; gap:7px; padding:7px 11px; background:${C.deep}; border-radius:6px; border:1px solid ${C.border}; font-size:.88rem; }
   .rule-icon { font-size:1rem; flex-shrink:0; }
@@ -323,15 +314,58 @@ const TABS = ["Roster","Match 1","Match 2","Match 3","Match 4","Match 5","Leader
 
 // ═════════════════════════════════════════════════════════════════════════════
 export default function App() {
-  const [tab,   setTab]   = useState(0);
-  const [teams, setTeams] = useState([newTeam("Team 1"), newTeam("Team 2")]);
+  const [tab,        setTab]        = useState(0);
+  const [teams,      setTeams]      = useState(DEFAULT_TEAMS);
+  const [syncStatus, setSyncStatus] = useState("live"); // "live" | "saving" | "offline"
+  const isRemoteUpdate = useRef(false);
+  const saveTimer      = useRef(null);
+
+  // ── READ: subscribe to Firestore on mount ──────────────────────────────────
+  useEffect(() => {
+    const unsub = onSnapshot(
+      DOC_REF,
+      (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.teams && data.teams.length > 0) {
+            isRemoteUpdate.current = true;
+            setTeams(data.teams);
+          }
+        }
+        setSyncStatus("live");
+      },
+      (err) => {
+        console.error("Firestore error:", err);
+        setSyncStatus("offline");
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  // ── WRITE: debounced save to Firestore whenever teams changes ──────────────
+  useEffect(() => {
+    // If this state change came FROM Firestore, don't write back
+    if (isRemoteUpdate.current) {
+      isRemoteUpdate.current = false;
+      return;
+    }
+    setSyncStatus("saving");
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      setDoc(DOC_REF, { teams })
+        .then(() => setSyncStatus("live"))
+        .catch((err) => {
+          console.error("Save error:", err);
+          setSyncStatus("offline");
+        });
+    }, 600); // 600ms debounce — fast enough, won't hammer Firestore
+  }, [teams]);
 
   // ── team CRUD ──────────────────────────────────────────────────────────────
   const addTeam        = ()          => setTeams(ts => [...ts, newTeam(`Team ${ts.length + 1}`)]);
   const removeTeam     = (tid)       => { if (teams.length > 1) setTeams(ts => ts.filter(t => t.id !== tid)); };
   const updateTeamName = (tid, name) => setTeams(ts => ts.map(t => t.id === tid ? { ...t, name } : t));
 
-  // ── team match placement ───────────────────────────────────────────────────
   const updateTeamMatchPlacement = (tid, mi, val) =>
     setTeams(ts => ts.map(t => {
       if (t.id !== tid) return t;
@@ -340,7 +374,6 @@ export default function App() {
       return { ...t, matchPlacements: mp };
     }));
 
-  // ── member CRUD ───────────────────────────────────────────────────────────
   const addMember        = (tid)      => setTeams(ts => ts.map(t => t.id !== tid ? t : { ...t, members: [...t.members, newPlayer("")] }));
   const removeMember     = (tid, pid) => setTeams(ts => ts.map(t => {
     if (t.id !== tid || t.members.length <= 1) return t;
@@ -350,7 +383,6 @@ export default function App() {
     t.id !== tid ? t : { ...t, members: t.members.map(m => m.id === pid ? { ...m, name: v } : m) }
   ));
 
-  // ── match stat ─────────────────────────────────────────────────────────────
   const updateStat = (tid, pid, mi, field, val) =>
     setTeams(ts => ts.map(t => {
       if (t.id !== tid) return t;
@@ -382,7 +414,6 @@ export default function App() {
   const playerLeaderboard = [...allPlayers].sort((a,b) => b.pts - a.pts);
   const maxTeamPts = Math.max(1, ...teamsWithStats.map(t => t.pts));
 
-  // Live rank maps: id → 1-based rank (by pts)
   const teamRankMap   = Object.fromEntries(teamLeaderboard.map((t, i) => [t.id, i + 1]));
   const playerRankMap = Object.fromEntries(playerLeaderboard.map((p, i) => [p.id, i + 1]));
   const totalWater = allPlayers.reduce((s,p) => s + p.shots, 0);
@@ -390,6 +421,8 @@ export default function App() {
   const matchIdx    = tab - 1;
   const scoredCount = (tab >= 1 && tab <= 5)
     ? allPlayers.filter(p => p.matches[matchIdx] && p.matches[matchIdx].placement !== "").length : 0;
+
+  const syncLabel = syncStatus === "saving" ? "Saving…" : syncStatus === "offline" ? "Offline" : "Live";
 
   return (
     <>
@@ -401,6 +434,10 @@ export default function App() {
           <div className="trophy">🏆💧🎮</div>
           <h1 className="title">Fortnite Water Cup</h1>
           <p className="subtitle">World Championship · Official Scorecard</p>
+          <div className="sync-bar">
+            <span className={`sync-dot ${syncStatus}`} />
+            <span>{syncLabel}</span>
+          </div>
         </div>
 
         {/* ── Live Scoreboard ── */}
@@ -413,18 +450,15 @@ export default function App() {
               const isLeading = rank === 1 && t.pts > 0;
               return (
                 <div className="sb-team" key={t.id} style={{ border:`1px solid ${isLeading ? t.color+"88" : t.color+"44"}` }}>
-                  {/* ghost rank number */}
                   <div className="sb-rank" style={{ color:t.color }}>{rank ?? "—"}</div>
                   <div className="sb-team-name" style={{ color:t.color }}>{t.name || `Team ${i+1}`}</div>
                   <div className="sb-team-pts"  style={{ color:t.color }}>{t.pts}</div>
                   <div className="sb-team-sub">
                     💧 {t.shots} shots · {t.members.filter(m=>m.name.trim()).length} players
                   </div>
-                  {/* live rank badge */}
                   <div className={`sb-rank-badge ${isLeading ? "sb-rank-1" : "sb-rank-n"}`}>
                     {isLeading ? "👑 #1 LEADING" : rank ? `#${rank}` : "—"}
                   </div>
-                  {/* match history pills */}
                   <div className="match-strip" style={{ marginTop:5 }}>
                     {t.matchPlacements.map((p, mi) => (
                       <MatchPip key={mi} placement={p} />
@@ -565,16 +599,12 @@ export default function App() {
 
                       return (
                         <Fragment key={team.id}>
-                          {/* ── Team header row with placement selector ── */}
                           <tr className="team-sep">
                             <td colSpan={7} style={{ padding:"8px 10px" }}>
                               <div className="team-placement-row" style={{ background:`${tc}0d`, border:`1px solid ${tc}33` }}>
-
-                                {/* Team name */}
                                 <span className="team-placement-label" style={{ color:tc }}>
                                   ▸ {team.name || `Team ${ti+1}`}
                                 </span>
-                                {/* Live rank badge */}
                                 {(() => {
                                   const r = teamRankMap[team.id];
                                   const leading = r === 1 && (teamsWithStats.find(t=>t.id===team.id)?.pts||0) > 0;
@@ -584,8 +614,6 @@ export default function App() {
                                     </span>
                                   ) : null;
                                 })()}
-
-                                {/* Placement selector */}
                                 <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
                                   <label className="inline" style={{ color:C.muted, fontSize:".65rem" }}>TEAM PLACEMENT</label>
                                   <select
@@ -605,8 +633,6 @@ export default function App() {
                                     ))}
                                   </select>
                                 </div>
-
-                                {/* Result badge */}
                                 {teamPlace && (
                                   <span
                                     className="placement-result-badge"
@@ -622,14 +648,13 @@ export default function App() {
                             </td>
                           </tr>
 
-                          {/* ── Player rows ── */}
                           {visible.map(member => {
                             const m = member.matches[matchIdx];
-                            const rowPts   =
+                            const rowPts =
                                 (parseInt(m.elims)      || 0) * ELIM_PTS
                               + (parseInt(m.reboots)    || 0) * REBOOT_PTS
                               + (parseInt(m.teamWipes)  || 0) * TEAM_WIPE_PTS;
-                            const hasData  = rowPts > 0 || (parseInt(m.waterShots)||0) > 0;
+                            const hasData = rowPts > 0 || (parseInt(m.waterShots)||0) > 0;
 
                             return (
                               <tr key={member.id}>
@@ -670,7 +695,7 @@ export default function App() {
                               </tr>
                             );
                           })}
-                          {/* ── Team match subtotal row ── */}
+
                           {(() => {
                             const placePts = teamPlace !== "" ? PLACEMENT_PTS(teamPlace) : 0;
                             const memberPts = visible.reduce((sum, member) => {
@@ -707,7 +732,6 @@ export default function App() {
         {/* ══════════════ LEADERBOARD ══════════════ */}
         {tab === 6 && (
           <>
-            {/* Team standings */}
             <div className="card">
               <div className="card-title">🏆 Team Standings</div>
               {teamLeaderboard.length === 0
@@ -738,7 +762,6 @@ export default function App() {
               }
             </div>
 
-            {/* Player rankings */}
             <div className="card">
               <div className="card-title">🎯 Player Rankings</div>
               {playerLeaderboard.length === 0
@@ -761,7 +784,6 @@ export default function App() {
               }
             </div>
 
-            {/* Awards */}
             <div className="card">
               <div className="card-title">🎖️ Awards</div>
               <div className="rules-grid">
