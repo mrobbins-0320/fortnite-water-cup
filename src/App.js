@@ -359,7 +359,7 @@ export default function App() {
           console.error("Save error:", err);
           setSyncStatus("offline");
         });
-    }, 600); // 600ms debounce — fast enough, won't hammer Firestore
+    }, 1200); // 1200ms debounce — gives time to finish typing before saving
   }, [teams]);
 
   // ── team CRUD ──────────────────────────────────────────────────────────────
@@ -493,10 +493,9 @@ export default function App() {
                   <div className="team-name-wrap">
                     <label>Team Name</label>
                     <input
-                      key={team.id}
-                      defaultValue={team.name}
+                      value={team.name}
                       placeholder={`Team ${ti+1}`}
-                      onBlur={e => updateTeamName(team.id, e.target.value)}
+                      onChange={e => updateTeamName(team.id, e.target.value)}
                       style={{ borderColor:teamColor(ti)+"66" }}
                     />
                   </div>
@@ -511,10 +510,9 @@ export default function App() {
                   <div className="member-row" key={m.id}>
                     <span className="member-num" style={{ color:teamColor(ti) }}>{mi+1}</span>
                     <input
-                      key={m.id}
-                      defaultValue={m.name}
+                      value={m.name}
                       placeholder={`Player ${mi+1}`}
-                      onBlur={e => updateMemberName(team.id, m.id, e.target.value)}
+                      onChange={e => updateMemberName(team.id, m.id, e.target.value)}
                     />
                     <button
                       className="btn btn-ghost"
