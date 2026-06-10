@@ -317,9 +317,9 @@ const TABS = ["Roster","Match 1","Match 2","Match 3","Match 4","Match 5","Leader
 export default function App() {
   const [tab,        setTab]        = useState(0);
   const [teams,      setTeams]      = useState(DEFAULT_TEAMS);
-  const [syncStatus, setSyncStatus] = useState("live"); // "live" | "saving" | "offline"
-  const isRemoteUpdate = useRef(false);
-  const saveTimer      = useRef(null);
+  const [syncStatus, setSyncStatus] = useState("saving");
+  const loadedRef = useRef(false); // blocks writes until first Firestore read
+  const saveTimer = useRef(null);
 
   // ── READ: subscribe to Firestore on mount ──────────────────────────────────
   useEffect(() => {
@@ -329,27 +329,28 @@ export default function App() {
         if (snap.exists()) {
           const data = snap.data();
           if (data.teams && data.teams.length > 0) {
-            isRemoteUpdate.current = true;
+            loadedRef.current = true;
             setTeams(data.teams);
+            setSyncStatus("live");
+            return;
           }
         }
+        // Doc is empty or doesn't exist yet — safe to start writing
+        loadedRef.current = true;
         setSyncStatus("live");
       },
       (err) => {
         console.error("Firestore error:", err);
+        loadedRef.current = true; // unblock on error too
         setSyncStatus("offline");
       }
     );
     return () => unsub();
   }, []);
 
-  // ── WRITE: debounced save to Firestore whenever teams changes ──────────────
+  // ── WRITE: only after first Firestore read completes ──────────────────────
   useEffect(() => {
-    // If this state change came FROM Firestore, don't write back
-    if (isRemoteUpdate.current) {
-      isRemoteUpdate.current = false;
-      return;
-    }
+    if (!loadedRef.current) return; // wait for first snapshot before any write
     setSyncStatus("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -359,7 +360,7 @@ export default function App() {
           console.error("Save error:", err);
           setSyncStatus("offline");
         });
-    }, 1200); // 1200ms debounce — gives time to finish typing before saving
+    }, 800);
   }, [teams]);
 
   // ── team CRUD ──────────────────────────────────────────────────────────────
